@@ -13,16 +13,16 @@ const knowledge = [
 ];
 
 function calc(s) {
-  const expr = s.replace(/,/g, '').match(/(?:what is|calculate|compute|solve|evaluate|equals?)\\s+(.+?)\\??$/i)?.[1] || (/^[\\d\\s()+\\-*/%.^]+$/.test(s.trim()) ? s.trim() : null);
-  if (!expr || expr.length > 100 || !/^[\\d\\s()+\\-*/%.^]+$/.test(expr)) return null;
+  const expr = s.replace(/,/g, '').match(/(?:what is|calculate|compute|solve|evaluate|equals?)\s+(.+?)\??$/i)?.[1] || (/^[\d\s()+\-*/%.^]+$/.test(s.trim()) ? s.trim() : null);
+  if (!expr || expr.length > 100 || !/^[\d\s()+\-*/%.^]+$/.test(expr)) return null;
   try {
-    const result = Function('"use strict"; return (' + expr.replace(/\\^/g, '**') + ')')();
+    const result = Function('"use strict"; return (' + expr.replace(/\^/g, '**') + ')')();
     return Number.isFinite(result) ? String(Number(result.toPrecision(12))) : null;
   } catch { return null; }
 }
 
 function decodeHtml(s) {
-  return String(s || '').replace(/<[^>]*>/g, ' ').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ').replace(/&#(\\d+);/g, (_, n) => String.fromCodePoint(Number(n))).replace(/&#x([\\da-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16))).replace(/\\s+/g, ' ').trim();
+  return String(s || '').replace(/<[^>]*>/g, ' ').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ').replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n))).replace(/&#x([\da-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16))).replace(/\s+/g, ' ').trim();
 }
 
 async function searchWeb(query) {
@@ -36,11 +36,11 @@ async function searchWeb(query) {
     });
     if (!response.ok) throw new Error('Search provider returned HTTP ' + response.status);
     const html = (await response.text()).slice(0, 1500000);
-    const blocks = html.split(/<div class="result\\b/).slice(1);
+    const blocks = html.split(/<div class="result\b/).slice(1);
     const results = [];
     for (const block of blocks) {
-      const anchor = block.match(/<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\\s\\S]*?)<\\/a>/i)
-        || block.match(/<a[^>]*href="([^"]+)"[^>]*class="result__a"[^>]*>([\\s\\S]*?)<\\/a>/i);
+      const anchor = block.match(/<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i)
+        || block.match(/<a[^>]*href="([^"]+)"[^>]*class="result__a"[^>]*>([\s\S]*?)<\/a>/i);
       if (!anchor) continue;
       let resultUrl = anchor[1].replace(/&amp;/g, '&');
       try {
@@ -48,13 +48,13 @@ async function searchWeb(query) {
         const redirect = parsed.searchParams.get('uddg');
         if (redirect) resultUrl = redirect;
       } catch { continue; }
-      if (!/^https?:\\/\\//i.test(resultUrl)) continue;
+      if (!/^https?:\/\//i.test(resultUrl)) continue;
       let parsedUrl;
       try { parsedUrl = new URL(resultUrl); } catch { continue; }
       if (!['http:', 'https:'].includes(parsedUrl.protocol)) continue;
       const title = decodeHtml(anchor[2]);
-      const snippetMatch = block.match(/class="result__snippet"[^>]*>([\\s\\S]*?)<\\/a>/i)
-        || block.match(/class="result__snippet"[^>]*>([\\s\\S]*?)<\\/div>/i);
+      const snippetMatch = block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/a>/i)
+        || block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/div>/i);
       const snippet = decodeHtml(snippetMatch?.[1] || '');
       if (title && !results.some(r => r.url === parsedUrl.href)) results.push({ title: title.slice(0, 220), url: parsedUrl.href, snippet: snippet.slice(0, 500), domain: parsedUrl.hostname });
       if (results.length >= 7) break;
@@ -71,13 +71,13 @@ function localAnswer(input) {
   const s = raw.toLowerCase();
   const math = calc(raw);
   if (math !== null) return 'Calculation: ' + raw + ' = ' + math;
-  if (/^(hi|hello|hey|yo|good morning|good evening)\\b/.test(s)) return 'Hey! I’m ChatBTC. Ask me a question and I’ll search the public web for relevant pages.';
+  if (/^(hi|hello|hey|yo|good morning|good evening)\b/.test(s)) return 'Hey! I’m ChatBTC. Ask me a question and I’ll search the public web for relevant pages.';
   for (const item of knowledge) if (item.keys.some(k => s.includes(k))) return item.text;
   return 'I searched the web for: “' + raw + '”. Here are the most relevant results I could find. Open the sources to read more.';
 }
 
 function isRestrictedSearch(q) {
-  return /\\b(porn|pornography|gambling|sports betting|casino betting|buy (?:a )?(?:gun|firearm|weapon|ammunition)|make (?:a )?(?:bomb|explosive)|how to make (?:meth|fentanyl|poison)|suicide methods|how to self[- ]harm)\\b/i.test(q);
+  return /\b(porn|pornography|gambling|sports betting|casino betting|buy (?:a )?(?:gun|firearm|weapon|ammunition)|make (?:a )?(?:bomb|explosive)|how to make (?:meth|fentanyl|poison)|suicide methods|how to self[- ]harm)\b/i.test(q);
 }
 
 const mime = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.json': 'application/json; charset=utf-8', '.svg': 'image/svg+xml' };
@@ -113,7 +113,7 @@ const server = http.createServer((req, res) => {
         } catch (error) {
           const fallback = localAnswer(message);
           res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
-          return res.end(JSON.stringify({ reply: fallback + '\\n\\nLive search is temporarily unavailable. Please try again shortly.', results: [], mode: 'offline' }));
+          return res.end(JSON.stringify({ reply: fallback + '\n\nLive search is temporarily unavailable. Please try again shortly.', results: [], mode: 'offline' }));
         }
       } catch {
         res.writeHead(400, { 'content-type': 'application/json' });
