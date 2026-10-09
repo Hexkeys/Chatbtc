@@ -104,6 +104,22 @@ function makeSafeSearchQuery(message) {
   return value + ' scientific principles safety educational overview site:edu OR site:gov';
 }
 
+function isSafeCalculatorExpression(expression) {
+  const value = String(expression || '');
+  return value.length > 0 &&
+    value.length <= LIMITS.MAX_CALC_EXPRESSION_CHARS &&
+    /^[\d\s()+\-*/%.^]+$/.test(value);
+}
+
+function isReadablePageContentType(contentType) {
+  return /(?:text\/html|application\/xhtml\+xml|text\/plain)/i.test(String(contentType || ''));
+}
+
+function isUsablePageText(text) {
+  const value = String(text || '').trim();
+  return value.length >= 160 && value.length <= LIMITS.MAX_PAGE_TEXT_CHARS;
+}
+
 function parseChatRequest(body) {
   let data;
   try {
@@ -383,6 +399,9 @@ module.exports = {
   getRequestPolicy,
   makeSafeSearchQuery,
   parseChatRequest,
+  isSafeCalculatorExpression,
+  isReadablePageContentType,
+  isUsablePageText,
   readRequestBody,
   isPublicIp,
   isAllowedUrlShape,
