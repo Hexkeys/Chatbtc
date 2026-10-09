@@ -26,6 +26,10 @@ Open http://localhost:3000. Node.js 18+ is required for built-in `fetch`.
 - Local arithmetic and instant greeting responses.
 - Basic request-size limit and safe DOM rendering for search results.
 
+## Edit safety rules and limits
+
+Open [`safety-limits.js`](./safety-limits.js) to adjust the app's built-in limits and blocked-search patterns. The `LIMITS` section controls request/message size, search timeouts, cache size/age, result counts, snippet lengths, and calculator expression length. The `BLOCKED_SEARCH_PATTERNS` list controls which search requests are blocked, and `BLOCKED_SEARCH_REPLY` controls the message shown when a request is blocked. These are basic keyword rules, not a complete safety system. After editing the file, commit the change and redeploy the app for it to take effect.
+
 ## Important limitation
 
 ChatBTC does **not** run a real language model. It creates a quick overview from search-result snippets, so it cannot reason like a frontier AI or reliably synthesize full articles. Search providers can block automated requests; fallback providers improve resilience but cannot guarantee availability, and results may be incomplete. Always open the cited sources for context. A genuine AI model that writes original answers generally requires running a model yourself or connecting a model provider; this repository is designed to remain key-free.
