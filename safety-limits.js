@@ -10,7 +10,7 @@
 
 const LIMITS = Object.freeze({
   // Incoming request and message limits
-  MAX_REQUEST_BODY_BYTES: 12000,
+  MAX_REQUEST_BODY_CHARS: 12000,
   MAX_MESSAGE_CHARS: 500,
 
   // Search reliability and resource limits
