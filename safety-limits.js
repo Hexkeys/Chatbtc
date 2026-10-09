@@ -306,6 +306,14 @@ function isTrustedEducationalUrl(rawUrl) {
   }
 }
 
+function applySecurityHeaders(res) {
+  res.setHeader('x-content-type-options', 'nosniff');
+  res.setHeader('x-frame-options', 'DENY');
+  res.setHeader('referrer-policy', 'strict-origin-when-cross-origin');
+  res.setHeader('permissions-policy', 'camera=(), microphone=(), geolocation=()');
+  res.setHeader('content-security-policy', "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; object-src 'none'; form-action 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'");
+}
+
 module.exports = {
   LIMITS,
   BLOCKED_SEARCH_PATTERNS,
@@ -320,5 +328,6 @@ module.exports = {
   isPublicIp,
   assertPublicHttpUrl,
   safeFetchText,
-  isTrustedEducationalUrl
+  isTrustedEducationalUrl,
+  applySecurityHeaders
 };
