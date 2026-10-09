@@ -103,13 +103,13 @@ async function searchBing(query) {
 }
 
 async function searchWikipedia(query) {
-  const url = 'https://en.wikipedia.org/w/rest.php/v1/search/page?q=' + encodeURIComponent(query) + '&limit=' + LIMITS.MAX_RESULTS_PER_PROVIDER';
+  const url = 'https://en.wikipedia.org/w/rest.php/v1/search/page?q=' + encodeURIComponent(query) + '&limit=' + LIMITS.MAX_RESULTS_PER_PROVIDER;
   const raw = await fetchText(url, 'application/json');
   const data = JSON.parse(raw);
   const results = (data.pages || []).map(page => ({
-    title: String(page.title || '').slice(0, 220),
+    title: String(page.title || '').slice(0, LIMITS.MAX_RESULT_TITLE_CHARS),
     url: 'https://en.wikipedia.org/wiki/' + encodeURIComponent(String(page.title || '').replace(/ /g, '_')),
-    snippet: decodeHtml(page.description || page.excerpt || '').slice(0, 500),
+    snippet: decodeHtml(page.description || page.excerpt || '').slice(0, LIMITS.MAX_RESULT_SNIPPET_CHARS),
     domain: 'en.wikipedia.org',
     source: 'Wikipedia'
   })).filter(r => r.title);
