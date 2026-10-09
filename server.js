@@ -80,7 +80,7 @@ async function searchDuckDuckGo(query) {
 }
 
 async function searchBing(query) {
-  const html = await fetchText('https://www.bing.com/search?q=' + encodeURIComponent(query) + '&count=' + LIMITS.MAX_RESULTS_PER_PROVIDER');
+  const html = await fetchText('https://www.bing.com/search?q=' + encodeURIComponent(query) + '&count=' + LIMITS.MAX_RESULTS_PER_PROVIDER);
   const blocks = html.split(/<li class="b_algo"\b/i).slice(1);
   const results = [];
   for (const block of blocks) {
