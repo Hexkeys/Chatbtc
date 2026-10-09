@@ -54,11 +54,11 @@ async function fetchText(url, accept = 'text/html') {
 
 async function searchDuckDuckGo(query) {
   const html = await fetchText('https://html.duckduckgo.com/html/?q=' + encodeURIComponent(query) + '&kl=wt-wt');
-  const blocks = html.split(/<div class="result\\b/).slice(1);
+  const blocks = html.split(/<div class="result\b/).slice(1);
   const results = [];
   for (const block of blocks) {
-    const anchor = block.match(/<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\\s\\S]*?)<\\/a>/i)
-      || block.match(/<a[^>]*href="([^"]+)"[^>]*class="result__a"[^>]*>([\\s\\S]*?)<\\/a>/i);
+    const anchor = block.match(/<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i)
+      || block.match(/<a[^>]*href="([^"]+)"[^>]*class="result__a"[^>]*>([\s\S]*?)<\/a>/i);
     if (!anchor) continue;
     let resultUrl = anchor[1].replace(/&amp;/g, '&');
     try {
@@ -70,8 +70,8 @@ async function searchDuckDuckGo(query) {
     try { parsedUrl = new URL(resultUrl); } catch { continue; }
     if (!['http:', 'https:'].includes(parsedUrl.protocol)) continue;
     const title = decodeHtml(anchor[2]);
-    const snippetMatch = block.match(/class="result__snippet"[^>]*>([\\s\\S]*?)<\\/a>/i)
-      || block.match(/class="result__snippet"[^>]*>([\\s\\S]*?)<\\/div>/i);
+    const snippetMatch = block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/a>/i)
+      || block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/div>/i);
     const snippet = decodeHtml(snippetMatch?.[1] || '');
     if (title && !results.some(r => r.url === parsedUrl.href)) {
       results.push({ title: title.slice(0, 220), url: parsedUrl.href, snippet: snippet.slice(0, 500), domain: parsedUrl.hostname, source: 'DuckDuckGo' });
@@ -84,17 +84,17 @@ async function searchDuckDuckGo(query) {
 
 async function searchBing(query) {
   const html = await fetchText('https://www.bing.com/search?q=' + encodeURIComponent(query) + '&count=8');
-  const blocks = html.split(/<li class="b_algo"\\b/i).slice(1);
+  const blocks = html.split(/<li class="b_algo"\b/i).slice(1);
   const results = [];
   for (const block of blocks) {
-    const anchor = block.match(/<h2[^>]*>\\s*<a[^>]*href="([^"]+)"[^>]*>([\\s\\S]*?)<\\/a>/i);
+    const anchor = block.match(/<h2[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
     if (!anchor) continue;
     let parsedUrl;
     try { parsedUrl = new URL(anchor[1].replace(/&amp;/g, '&')); } catch { continue; }
     if (!['http:', 'https:'].includes(parsedUrl.protocol)) continue;
     const title = decodeHtml(anchor[2]);
-    const snippetMatch = block.match(/<p[^>]*>([\\s\\S]*?)<\\/p>/i)
-      || block.match(/class="b_caption"[^>]*>([\\s\\S]*?)<\\/div>/i);
+    const snippetMatch = block.match(/<p[^>]*>([\s\S]*?)<\/p>/i)
+      || block.match(/class="b_caption"[^>]*>([\s\S]*?)<\/div>/i);
     const snippet = decodeHtml(snippetMatch?.[1] || '');
     if (title && !results.some(r => r.url === parsedUrl.href)) {
       results.push({ title: title.slice(0, 220), url: parsedUrl.href, snippet: snippet.slice(0, 500), domain: parsedUrl.hostname, source: 'Bing' });
