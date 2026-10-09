@@ -11,10 +11,10 @@ const cache = new Map();
 const inFlight = new Map();
 
 function calc(s) {
-  const expr = s.replace(/,/g, '').match(/(?:what is|calculate|compute|solve|evaluate|equals?)\\s+(.+?)\\??$/i)?.[1] || (/^[\\d\\s()+\\-*/%.^]+$/.test(s.trim()) ? s.trim() : null);
-  if (!expr || expr.length > 100 || !/^[\\d\\s()+\\-*/%.^]+$/.test(expr)) return null;
+  const expr = s.replace(/,/g, '').match(/(?:what is|calculate|compute|solve|evaluate|equals?)\s+(.+?)\??$/i)?.[1] || (/^[\d\s()+\-*/%.^]+$/.test(s.trim()) ? s.trim() : null);
+  if (!expr || expr.length > 100 || !/^[\d\s()+\-*/%.^]+$/.test(expr)) return null;
   try {
-    const result = Function('"use strict"; return (' + expr.replace(/\\^/g, '**') + ')')();
+    const result = Function('"use strict"; return (' + expr.replace(/\^/g, '**') + ')')();
     return Number.isFinite(result) ? String(Number(result.toPrecision(12))) : null;
   } catch { return null; }
 }
@@ -23,14 +23,14 @@ function decodeHtml(s) {
   return String(s || '').replace(/<[^>]*>/g, ' ')
     .replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'")
     .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ')
-    .replace(/&#(\\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
-    .replace(/&#x([\\da-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))
-    .replace(/\\s+/g, ' ').trim();
+    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
+    .replace(/&#x([\da-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))
+    .replace(/\s+/g, ' ').trim();
 }
 
 function simplifiedQuery(query) {
   return query
-    .replace(/^(please\\s+)?(can you|could you|would you|tell me|explain|find|search for|look up|what is|what are|who is|who are|when did|where is|how does|how do|how can)\\s+/i, '')
+    .replace(/^(please\s+)?(can you|could you|would you|tell me|explain|find|search for|look up|what is|what are|who is|who are|when did|where is|how does|how do|how can)\s+/i, '')
     .replace(/[?!.]+$/g, '').trim();
 }
 
@@ -48,11 +48,11 @@ async function searchOne(query) {
     });
     if (!response.ok) throw new Error('Search provider returned HTTP ' + response.status);
     const html = (await response.text()).slice(0, 1200000);
-    const blocks = html.split(/<div class="result\\b/).slice(1);
+    const blocks = html.split(/<div class="result\b/).slice(1);
     const results = [];
     for (const block of blocks) {
-      const anchor = block.match(/<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\\s\\S]*?)<\\/a>/i)
-        || block.match(/<a[^>]*href="([^"]+)"[^>]*class="result__a"[^>]*>([\\s\\S]*?)<\\/a>/i);
+      const anchor = block.match(/<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i)
+        || block.match(/<a[^>]*href="([^"]+)"[^>]*class="result__a"[^>]*>([\s\S]*?)<\/a>/i);
       if (!anchor) continue;
       let resultUrl = anchor[1].replace(/&amp;/g, '&');
       try {
@@ -64,8 +64,8 @@ async function searchOne(query) {
       try { parsedUrl = new URL(resultUrl); } catch { continue; }
       if (!['http:', 'https:'].includes(parsedUrl.protocol)) continue;
       const title = decodeHtml(anchor[2]);
-      const snippetMatch = block.match(/class="result__snippet"[^>]*>([\\s\\S]*?)<\\/a>/i)
-        || block.match(/class="result__snippet"[^>]*>([\\s\\S]*?)<\\/div>/i);
+      const snippetMatch = block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/a>/i)
+        || block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/div>/i);
       const snippet = decodeHtml(snippetMatch?.[1] || '');
       if (title && !results.some(r => r.url === parsedUrl.href)) {
         results.push({ title: title.slice(0, 220), url: parsedUrl.href, snippet: snippet.slice(0, 500), domain: parsedUrl.hostname });
@@ -79,7 +79,7 @@ async function searchOne(query) {
 }
 
 function searchWeb(query) {
-  const key = query.toLowerCase().replace(/\\s+/g, ' ').trim();
+  const key = query.toLowerCase().replace(/\s+/g, ' ').trim();
   const now = Date.now();
   const cached = cache.get(key);
   if (cached && now - cached.time < CACHE_TTL_MS) {
@@ -116,11 +116,11 @@ function makeAnswer(query, results) {
   const useful = results.filter(r => r.snippet && r.snippet.length > 35).slice(0, 4);
   if (!useful.length) return 'I found web pages about “' + query + '”. Open the source links below to read the details.';
   const lines = useful.slice(0, 3).map((r, i) => (i + 1) + '. ' + r.snippet);
-  return 'Here’s a quick answer based on live web search for “' + query + '”:\\n\\n' + lines.join('\\n\\n') + '\\n\\nThese are search-snippet summaries, not a response from a trained AI model. Open the linked sources below to check context and details.';
+  return 'Here’s a quick answer based on live web search for “' + query + '”:\n\n' + lines.join('\n\n') + '\n\nThese are search-snippet summaries, not a response from a trained AI model. Open the linked sources below to check context and details.';
 }
 
 function isRestrictedSearch(q) {
-  return /\\b(porn|pornography|gambling|sports betting|casino betting|buy (?:a )?(?:gun|firearm|weapon|ammunition)|make (?:a )?(?:bomb|explosive)|how to make (?:meth|fentanyl|poison)|suicide methods|how to self[- ]harm)\\b/i.test(q);
+  return /\b(porn|pornography|gambling|sports betting|casino betting|buy (?:a )?(?:gun|firearm|weapon|ammunition)|make (?:a )?(?:bomb|explosive)|how to make (?:meth|fentanyl|poison)|suicide methods|how to self[- ]harm)\b/i.test(q);
 }
 
 const mime = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.json': 'application/json; charset=utf-8', '.svg': 'image/svg+xml' };
