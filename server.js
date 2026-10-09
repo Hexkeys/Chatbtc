@@ -34,48 +34,103 @@ function simplifiedQuery(query) {
     .replace(/[?!.]+$/g, '').trim();
 }
 
-async function searchOne(query) {
-  const url = 'https://html.duckduckgo.com/html/?q=' + encodeURIComponent(query) + '&kl=wt-wt';
+async function fetchText(url, accept = 'text/html') {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
   try {
     const response = await fetch(url, {
       signal: controller.signal,
       headers: {
-        'user-agent': 'Mozilla/5.0 (compatible; ChatBTC/2.0; +https://github.com/Hexkeys/Chatbtc)',
-        'accept': 'text/html'
+        'user-agent': 'ChatBTC/2.1 (https://github.com/Hexkeys/Chatbtc)',
+        'accept': accept
       }
     });
     if (!response.ok) throw new Error('Search provider returned HTTP ' + response.status);
-    const html = (await response.text()).slice(0, 1200000);
-    const blocks = html.split(/<div class="result\b/).slice(1);
-    const results = [];
-    for (const block of blocks) {
-      const anchor = block.match(/<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i)
-        || block.match(/<a[^>]*href="([^"]+)"[^>]*class="result__a"[^>]*>([\s\S]*?)<\/a>/i);
-      if (!anchor) continue;
-      let resultUrl = anchor[1].replace(/&amp;/g, '&');
-      try {
-        const parsed = new URL(resultUrl, 'https://duckduckgo.com');
-        const redirect = parsed.searchParams.get('uddg');
-        if (redirect) resultUrl = redirect;
-      } catch { continue; }
-      let parsedUrl;
-      try { parsedUrl = new URL(resultUrl); } catch { continue; }
-      if (!['http:', 'https:'].includes(parsedUrl.protocol)) continue;
-      const title = decodeHtml(anchor[2]);
-      const snippetMatch = block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/a>/i)
-        || block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/div>/i);
-      const snippet = decodeHtml(snippetMatch?.[1] || '');
-      if (title && !results.some(r => r.url === parsedUrl.href)) {
-        results.push({ title: title.slice(0, 220), url: parsedUrl.href, snippet: snippet.slice(0, 500), domain: parsedUrl.hostname });
-      }
-      if (results.length >= 8) break;
-    }
-    return results;
+    return (await response.text()).slice(0, 1200000);
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function searchDuckDuckGo(query) {
+  const html = await fetchText('https://html.duckduckgo.com/html/?q=' + encodeURIComponent(query) + '&kl=wt-wt');
+  const blocks = html.split(/<div class="result\\b/).slice(1);
+  const results = [];
+  for (const block of blocks) {
+    const anchor = block.match(/<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\\s\\S]*?)<\\/a>/i)
+      || block.match(/<a[^>]*href="([^"]+)"[^>]*class="result__a"[^>]*>([\\s\\S]*?)<\\/a>/i);
+    if (!anchor) continue;
+    let resultUrl = anchor[1].replace(/&amp;/g, '&');
+    try {
+      const parsed = new URL(resultUrl, 'https://duckduckgo.com');
+      const redirect = parsed.searchParams.get('uddg');
+      if (redirect) resultUrl = redirect;
+    } catch { continue; }
+    let parsedUrl;
+    try { parsedUrl = new URL(resultUrl); } catch { continue; }
+    if (!['http:', 'https:'].includes(parsedUrl.protocol)) continue;
+    const title = decodeHtml(anchor[2]);
+    const snippetMatch = block.match(/class="result__snippet"[^>]*>([\\s\\S]*?)<\\/a>/i)
+      || block.match(/class="result__snippet"[^>]*>([\\s\\S]*?)<\\/div>/i);
+    const snippet = decodeHtml(snippetMatch?.[1] || '');
+    if (title && !results.some(r => r.url === parsedUrl.href)) {
+      results.push({ title: title.slice(0, 220), url: parsedUrl.href, snippet: snippet.slice(0, 500), domain: parsedUrl.hostname, source: 'DuckDuckGo' });
+    }
+    if (results.length >= 8) break;
+  }
+  if (!results.length) throw new Error('DuckDuckGo returned no parseable results');
+  return results;
+}
+
+async function searchBing(query) {
+  const html = await fetchText('https://www.bing.com/search?q=' + encodeURIComponent(query) + '&count=8');
+  const blocks = html.split(/<li class="b_algo"\\b/i).slice(1);
+  const results = [];
+  for (const block of blocks) {
+    const anchor = block.match(/<h2[^>]*>\\s*<a[^>]*href="([^"]+)"[^>]*>([\\s\\S]*?)<\\/a>/i);
+    if (!anchor) continue;
+    let parsedUrl;
+    try { parsedUrl = new URL(anchor[1].replace(/&amp;/g, '&')); } catch { continue; }
+    if (!['http:', 'https:'].includes(parsedUrl.protocol)) continue;
+    const title = decodeHtml(anchor[2]);
+    const snippetMatch = block.match(/<p[^>]*>([\\s\\S]*?)<\\/p>/i)
+      || block.match(/class="b_caption"[^>]*>([\\s\\S]*?)<\\/div>/i);
+    const snippet = decodeHtml(snippetMatch?.[1] || '');
+    if (title && !results.some(r => r.url === parsedUrl.href)) {
+      results.push({ title: title.slice(0, 220), url: parsedUrl.href, snippet: snippet.slice(0, 500), domain: parsedUrl.hostname, source: 'Bing' });
+    }
+    if (results.length >= 8) break;
+  }
+  if (!results.length) throw new Error('Bing returned no parseable results');
+  return results;
+}
+
+async function searchWikipedia(query) {
+  const url = 'https://en.wikipedia.org/w/rest.php/v1/search/page?q=' + encodeURIComponent(query) + '&limit=8';
+  const raw = await fetchText(url, 'application/json');
+  const data = JSON.parse(raw);
+  const results = (data.pages || []).map(page => ({
+    title: String(page.title || '').slice(0, 220),
+    url: 'https://en.wikipedia.org/wiki/' + encodeURIComponent(String(page.title || '').replace(/ /g, '_')),
+    snippet: decodeHtml(page.description || page.excerpt || '').slice(0, 500),
+    domain: 'en.wikipedia.org',
+    source: 'Wikipedia'
+  })).filter(r => r.title);
+  if (!results.length) throw new Error('Wikipedia returned no results');
+  return results;
+}
+
+async function searchOne(query) {
+  const providers = [searchDuckDuckGo, searchBing, searchWikipedia];
+  let lastError;
+  for (const provider of providers) {
+    try {
+      return await provider(query);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error('All search providers failed');
 }
 
 function searchWeb(query) {
