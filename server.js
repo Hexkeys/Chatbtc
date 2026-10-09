@@ -3,44 +3,56 @@ const fs = require('fs');
 const path = require('path');
 const PORT = process.env.PORT || 3000;
 const ROOT = path.join(__dirname, 'public');
-
-const knowledge = [
-  { keys: ['photosynthesis'], text: 'Photosynthesis is how plants use light energy to turn carbon dioxide and water into sugars, releasing oxygen. The simplified equation is 6CO₂ + 6H₂O + light → C₆H₁₂O₆ + 6O₂.' },
-  { keys: ['black hole'], text: 'A black hole is a region of spacetime whose gravity is so strong that, past its event horizon, nothing can escape—not even light.' },
-  { keys: ['bitcoin', 'btc', 'blockchain'], text: 'Bitcoin is a decentralized digital currency. Transactions are grouped into blocks and secured by proof of work. Prices are volatile; this service does not provide financial advice.' },
-  { keys: ['javascript', 'node.js', 'nodejs'], text: 'JavaScript runs in browsers and on servers through runtimes such as Node.js. On Render, listen on process.env.PORT.' },
-  { keys: ['machine learning', 'neural network'], text: 'Machine learning fits patterns from examples. Neural networks use layers of parameterized transformations trained with an optimization algorithm.' }
-];
+const MAX_BODY = 12000;
+const SEARCH_TIMEOUT_MS = 6500;
+const CACHE_TTL_MS = 3 * 60 * 1000;
+const MAX_CACHE_ITEMS = 150;
+const cache = new Map();
+const inFlight = new Map();
 
 function calc(s) {
-  const expr = s.replace(/,/g, '').match(/(?:what is|calculate|compute|solve|evaluate|equals?)\s+(.+?)\??$/i)?.[1] || (/^[\d\s()+\-*/%.^]+$/.test(s.trim()) ? s.trim() : null);
-  if (!expr || expr.length > 100 || !/^[\d\s()+\-*/%.^]+$/.test(expr)) return null;
+  const expr = s.replace(/,/g, '').match(/(?:what is|calculate|compute|solve|evaluate|equals?)\\s+(.+?)\\??$/i)?.[1] || (/^[\\d\\s()+\\-*/%.^]+$/.test(s.trim()) ? s.trim() : null);
+  if (!expr || expr.length > 100 || !/^[\\d\\s()+\\-*/%.^]+$/.test(expr)) return null;
   try {
-    const result = Function('"use strict"; return (' + expr.replace(/\^/g, '**') + ')')();
+    const result = Function('"use strict"; return (' + expr.replace(/\\^/g, '**') + ')')();
     return Number.isFinite(result) ? String(Number(result.toPrecision(12))) : null;
   } catch { return null; }
 }
 
 function decodeHtml(s) {
-  return String(s || '').replace(/<[^>]*>/g, ' ').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ').replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n))).replace(/&#x([\da-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16))).replace(/\s+/g, ' ').trim();
+  return String(s || '').replace(/<[^>]*>/g, ' ')
+    .replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'")
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ')
+    .replace(/&#(\\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
+    .replace(/&#x([\\da-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))
+    .replace(/\\s+/g, ' ').trim();
 }
 
-async function searchWeb(query) {
+function simplifiedQuery(query) {
+  return query
+    .replace(/^(please\\s+)?(can you|could you|would you|tell me|explain|find|search for|look up|what is|what are|who is|who are|when did|where is|how does|how do|how can)\\s+/i, '')
+    .replace(/[?!.]+$/g, '').trim();
+}
+
+async function searchOne(query) {
   const url = 'https://html.duckduckgo.com/html/?q=' + encodeURIComponent(query) + '&kl=wt-wt';
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10000);
+  const timeout = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
   try {
     const response = await fetch(url, {
       signal: controller.signal,
-      headers: { 'user-agent': 'Mozilla/5.0 (compatible; ChatBTC/1.0; +https://github.com/Hexkeys/Chatbtc)', 'accept': 'text/html' }
+      headers: {
+        'user-agent': 'Mozilla/5.0 (compatible; ChatBTC/2.0; +https://github.com/Hexkeys/Chatbtc)',
+        'accept': 'text/html'
+      }
     });
     if (!response.ok) throw new Error('Search provider returned HTTP ' + response.status);
-    const html = (await response.text()).slice(0, 1500000);
-    const blocks = html.split(/<div class="result\b/).slice(1);
+    const html = (await response.text()).slice(0, 1200000);
+    const blocks = html.split(/<div class="result\\b/).slice(1);
     const results = [];
     for (const block of blocks) {
-      const anchor = block.match(/<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i)
-        || block.match(/<a[^>]*href="([^"]+)"[^>]*class="result__a"[^>]*>([\s\S]*?)<\/a>/i);
+      const anchor = block.match(/<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\\s\\S]*?)<\\/a>/i)
+        || block.match(/<a[^>]*href="([^"]+)"[^>]*class="result__a"[^>]*>([\\s\\S]*?)<\\/a>/i);
       if (!anchor) continue;
       let resultUrl = anchor[1].replace(/&amp;/g, '&');
       try {
@@ -48,16 +60,17 @@ async function searchWeb(query) {
         const redirect = parsed.searchParams.get('uddg');
         if (redirect) resultUrl = redirect;
       } catch { continue; }
-      if (!/^https?:\/\//i.test(resultUrl)) continue;
       let parsedUrl;
       try { parsedUrl = new URL(resultUrl); } catch { continue; }
       if (!['http:', 'https:'].includes(parsedUrl.protocol)) continue;
       const title = decodeHtml(anchor[2]);
-      const snippetMatch = block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/a>/i)
-        || block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/div>/i);
+      const snippetMatch = block.match(/class="result__snippet"[^>]*>([\\s\\S]*?)<\\/a>/i)
+        || block.match(/class="result__snippet"[^>]*>([\\s\\S]*?)<\\/div>/i);
       const snippet = decodeHtml(snippetMatch?.[1] || '');
-      if (title && !results.some(r => r.url === parsedUrl.href)) results.push({ title: title.slice(0, 220), url: parsedUrl.href, snippet: snippet.slice(0, 500), domain: parsedUrl.hostname });
-      if (results.length >= 7) break;
+      if (title && !results.some(r => r.url === parsedUrl.href)) {
+        results.push({ title: title.slice(0, 220), url: parsedUrl.href, snippet: snippet.slice(0, 500), domain: parsedUrl.hostname });
+      }
+      if (results.length >= 8) break;
     }
     return results;
   } finally {
@@ -65,31 +78,66 @@ async function searchWeb(query) {
   }
 }
 
-function localAnswer(input) {
-  const raw = String(input || '').trim();
-  if (!raw) return 'Ask me a question and I’ll search the web for useful sources.';
-  const s = raw.toLowerCase();
-  const math = calc(raw);
-  if (math !== null) return 'Calculation: ' + raw + ' = ' + math;
-  if (/^(hi|hello|hey|yo|good morning|good evening)\b/.test(s)) return 'Hey! I’m ChatBTC. Ask me a question and I’ll search the public web for relevant pages.';
-  for (const item of knowledge) if (item.keys.some(k => s.includes(k))) return item.text;
-  return 'I searched the web for: “' + raw + '”. Here are the most relevant results I could find. Open the sources to read more.';
+function searchWeb(query) {
+  const key = query.toLowerCase().replace(/\\s+/g, ' ').trim();
+  const now = Date.now();
+  const cached = cache.get(key);
+  if (cached && now - cached.time < CACHE_TTL_MS) {
+    cache.delete(key); cache.set(key, cached);
+    return Promise.resolve(cached.results);
+  }
+  if (inFlight.has(key)) return inFlight.get(key);
+  const shortQuery = simplifiedQuery(query);
+  const variants = shortQuery && shortQuery.toLowerCase() !== key ? [query, shortQuery] : [query];
+  const work = Promise.allSettled(variants.map(searchOne)).then(outcomes => {
+    const merged = [];
+    const seen = new Set();
+    for (const outcome of outcomes) {
+      if (outcome.status !== 'fulfilled') continue;
+      for (const item of outcome.value) {
+        if (!seen.has(item.url)) { seen.add(item.url); merged.push(item); }
+      }
+    }
+    if (!merged.length) {
+      const failure = outcomes.find(x => x.status === 'rejected');
+      if (failure) throw failure.reason;
+    }
+    const results = merged.slice(0, 8);
+    cache.set(key, { time: Date.now(), results });
+    while (cache.size > MAX_CACHE_ITEMS) cache.delete(cache.keys().next().value);
+    return results;
+  }).finally(() => inFlight.delete(key));
+  inFlight.set(key, work);
+  return work;
+}
+
+function makeAnswer(query, results) {
+  if (!results.length) return 'I couldn’t find readable search results for “' + query + '”. Try a shorter phrase or include a specific name, date, or place.';
+  const useful = results.filter(r => r.snippet && r.snippet.length > 35).slice(0, 4);
+  if (!useful.length) return 'I found web pages about “' + query + '”. Open the source links below to read the details.';
+  const lines = useful.slice(0, 3).map((r, i) => (i + 1) + '. ' + r.snippet);
+  return 'Here’s a quick answer based on live web search for “' + query + '”:\\n\\n' + lines.join('\\n\\n') + '\\n\\nThese are search-snippet summaries, not a response from a trained AI model. Open the linked sources below to check context and details.';
 }
 
 function isRestrictedSearch(q) {
-  return /\b(porn|pornography|gambling|sports betting|casino betting|buy (?:a )?(?:gun|firearm|weapon|ammunition)|make (?:a )?(?:bomb|explosive)|how to make (?:meth|fentanyl|poison)|suicide methods|how to self[- ]harm)\b/i.test(q);
+  return /\\b(porn|pornography|gambling|sports betting|casino betting|buy (?:a )?(?:gun|firearm|weapon|ammunition)|make (?:a )?(?:bomb|explosive)|how to make (?:meth|fentanyl|poison)|suicide methods|how to self[- ]harm)\\b/i.test(q);
 }
 
 const mime = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.json': 'application/json; charset=utf-8', '.svg': 'image/svg+xml' };
 const server = http.createServer((req, res) => {
+  res.setHeader('x-content-type-options', 'nosniff');
   if (req.method === 'GET' && req.url === '/health') {
     res.writeHead(200, { 'content-type': 'application/json' });
-    return res.end(JSON.stringify({ ok: true, app: 'ChatBTC', mode: 'web-search-no-api-key' }));
+    return res.end(JSON.stringify({ ok: true, app: 'ChatBTC', mode: 'cached-parallel-web-search-no-api-key' }));
   }
   if (req.method === 'POST' && req.url === '/api/chat') {
     let body = '';
-    req.on('data', chunk => { body += chunk; if (body.length > 100000) req.destroy(); });
+    req.on('data', chunk => {
+      body += chunk;
+      if (body.length > MAX_BODY) { res.writeHead(413, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: 'Message is too large.' })); req.destroy(); }
+    });
     req.on('end', async () => {
+      if (res.writableEnded) return;
       try {
         const data = JSON.parse(body);
         const message = String(data.message || '').trim().slice(0, 500);
@@ -103,20 +151,21 @@ const server = http.createServer((req, res) => {
           res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
           return res.end(JSON.stringify({ reply: 'Calculation: ' + message + ' = ' + math, results: [], mode: 'local' }));
         }
+        if (/^(hi|hello|hey|yo|good morning|good evening)[!. ]*$/i.test(message)) {
+          res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+          return res.end(JSON.stringify({ reply: 'Hey! I’m ChatBTC. Ask me a question and I’ll search the web and summarize useful snippets with source links.', results: [], mode: 'local' }));
+        }
         try {
           const results = await searchWeb(message);
-          const reply = results.length
-            ? 'I searched the web for “' + message + '”. Here are the most relevant results I found. I can show search snippets, but I’m not a full language model and can’t independently verify every page.'
-            : 'The web search returned no readable results for “' + message + '”. Try rephrasing your question.';
+          const reply = makeAnswer(message, results);
           res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
           return res.end(JSON.stringify({ reply, results, mode: 'web' }));
-        } catch (error) {
-          const fallback = localAnswer(message);
+        } catch {
           res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
-          return res.end(JSON.stringify({ reply: fallback + '\n\nLive search is temporarily unavailable. Please try again shortly.', results: [], mode: 'offline' }));
+          return res.end(JSON.stringify({ reply: 'Live web search is temporarily unavailable. Please try again shortly.', results: [], mode: 'offline' }));
         }
       } catch {
-        res.writeHead(400, { 'content-type': 'application/json' });
+        if (!res.headersSent) res.writeHead(400, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ error: 'Invalid request. Send JSON with a message string.' }));
       }
     });
@@ -129,7 +178,7 @@ const server = http.createServer((req, res) => {
   if (!file.startsWith(ROOT + path.sep) && file !== path.join(ROOT, 'index.html')) { res.writeHead(403); return res.end('Forbidden'); }
   fs.readFile(file, (err, data) => {
     if (err) { res.writeHead(404); return res.end('Not found'); }
-    res.writeHead(200, { 'content-type': mime[path.extname(file)] || 'application/octet-stream', 'x-content-type-options': 'nosniff' });
+    res.writeHead(200, { 'content-type': mime[path.extname(file)] || 'application/octet-stream', 'cache-control': 'public, max-age=300' });
     if (req.method === 'HEAD') return res.end();
     res.end(data);
   });
