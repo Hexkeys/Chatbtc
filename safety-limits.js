@@ -182,6 +182,22 @@ function isPublicIp(address) {
   return false;
 }
 
+
+function isAllowedUrlShape(rawUrl) {
+  let url;
+  try { url = new URL(String(rawUrl)); } catch { return false; }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return false;
+  if (url.port && !['80', '443'].includes(url.port)) return false;
+
+  const hostname = url.hostname.replace(/^\[|\]$/g, '').toLowerCase().replace(/\.$/, '');
+  if (!hostname || hostname === 'localhost' || hostname.endsWith('.localhost') ||
+      hostname.endsWith('.local') || hostname.endsWith('.internal') ||
+      hostname.endsWith('.test') || hostname === 'metadata.google.internal' ||
+      hostname === 'metadata') return false;
+  if (net.isIP(hostname) && !isPublicIp(hostname)) return false;
+  return true;
+}
+
 async function assertPublicHttpUrl(rawUrl) {
   let url;
   try {
@@ -326,6 +342,7 @@ module.exports = {
   parseChatRequest,
   readRequestBody,
   isPublicIp,
+  isAllowedUrlShape,
   assertPublicHttpUrl,
   safeFetchText,
   isTrustedEducationalUrl,
