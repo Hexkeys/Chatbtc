@@ -12,7 +12,13 @@ const {
   parseChatRequest,
   readRequestBody,
   safeFetchText,
-  isAllowedUrlShape,
+  normalizeAllowedSourceUrl,
+  resolveStaticFile,
+  filterEducationalSummarySentences,
+  isOxygenQuestion,
+  EDUCATIONAL_REPLY_OXYGEN,
+  EDUCATIONAL_REPLY_GENERAL,
+  NO_TRUSTED_SOURCE_REPLY,
   isTrustedEducationalUrl,
   applySecurityHeaders
 } = require('./safety-limits');
@@ -61,15 +67,6 @@ async function fetchText(url, accept = 'text/html') {
   return fetched.text;
 }
 
-function parseSearchResultUrl(rawUrl, baseUrl) {
-  try {
-    const parsed = new URL(rawUrl, baseUrl);
-    if (!isAllowedUrlShape(parsed.href)) return null;
-    return parsed;
-  } catch {
-    return null;
-  }
-}
 
 async function searchDuckDuckGo(query) {
   const html = await fetchText('https://html.duckduckgo.com/html/?q=' + encodeURIComponent(query) + '&kl=wt-wt');
@@ -89,7 +86,7 @@ async function searchDuckDuckGo(query) {
       else rawUrl = parsed.href;
     } catch { continue; }
 
-    const parsedUrl = parseSearchResultUrl(rawUrl, 'https://duckduckgo.com');
+    const parsedUrl = normalizeAllowedSourceUrl(rawUrl, 'https://duckduckgo.com');
     if (!parsedUrl) continue;
     const title = decodeHtml(anchor[2]);
     const snippetMatch = block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/a>/i)
@@ -121,7 +118,7 @@ async function searchBing(query) {
   for (const block of blocks) {
     const anchor = block.match(/<h2[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
     if (!anchor) continue;
-    const parsedUrl = parseSearchResultUrl(anchor[1].replace(/&amp;/g, '&'), 'https://www.bing.com');
+    const parsedUrl = normalizeAllowedSourceUrl(anchor[1].replace(/&amp;/g, '&'), 'https://www.bing.com');
     if (!parsedUrl) continue;
 
     const title = decodeHtml(anchor[2]);
@@ -160,7 +157,7 @@ async function searchWikipedia(query) {
       source: 'Wikipedia',
       pageRead: false
     };
-  }).filter(r => r.title && isAllowedUrlShape(r.url));
+  }).filter(r => r.title && normalizeAllowedSourceUrl(r.url));
 
   if (!results.length) throw new Error('Wikipedia returned no results');
   return results;
@@ -243,11 +240,7 @@ function summarizePageText(text, query, educationalOnly) {
   let sentences = String(text || '').match(/[^.!?]+(?:[.!?]+|$)/g) || [];
   sentences = sentences.map(sentence => sentence.trim()).filter(sentence => sentence.length >= 45 && sentence.length <= 550);
 
-  if (educationalOnly) {
-    sentences = sentences.filter(sentence =>
-      !/\b(?:step\s*\d+|first,|next,|then,|add\s+\d|mix until|heat to|boil until|pour into|attach the|connect the|collect the gas|procedure is|follow these steps)\b/i.test(sentence)
-    );
-  }
+  if (educationalOnly) sentences = filterEducationalSummarySentences(sentences);
   if (!sentences.length) return '';
 
   const scored = sentences.map((sentence, index) => {
@@ -320,18 +313,14 @@ function makeAnswer(query, results, policy) {
 
   if (policy === 'educational-only') {
     let explanation;
-    if (/\bwater\b/i.test(query) && /\boxygen\b/i.test(query)) {
-      explanation = 'At a high level, electrolysis uses electrical energy to split water molecules into hydrogen and oxygen. It does not create oxygen alone: hydrogen is produced too. Hydrogen is flammable, and oxygen can make fires burn much more intensely, so I’ll keep this to the science and safety context rather than give a step-by-step gas-production procedure.';
-    } else {
-      explanation = 'I can give a scientific overview and discuss risks, but I won’t turn this into step-by-step instructions for a hazardous procedure.';
-    }
+    explanation = isOxygenQuestion(query) ? EDUCATIONAL_REPLY_OXYGEN : EDUCATIONAL_REPLY_GENERAL;
 
     if (pageSummaries.length) {
       explanation += '\n\nWhat the public educational pages say:\n\n' + pageSummaries
         .map((result, index) => (index + 1) + '. ' + result.title + ': ' + result.snippet)
         .join('\n\n');
     } else if (!results.length) {
-      explanation += '\n\nI couldn’t verify a suitable educational source in this search. Try a question about the underlying chemistry or scientific principles.';
+      explanation += '\n\n' + NO_TRUSTED_SOURCE_REPLY;
     }
     return explanation;
   }
@@ -436,18 +425,12 @@ const server = http.createServer((req, res) => {
     return res.end('Method not allowed');
   }
 
-  let requested;
+  let file;
   try {
-    requested = decodeURIComponent((req.url || '/').split('?')[0]);
-  } catch {
-    res.writeHead(400);
-    return res.end('Bad request');
-  }
-
-  const file = path.resolve(ROOT, '.' + (requested === '/' ? '/index.html' : requested));
-  if (!file.startsWith(ROOT + path.sep) && file !== path.join(ROOT, 'index.html')) {
-    res.writeHead(403);
-    return res.end('Forbidden');
+    file = resolveStaticFile(ROOT, req.url || '/');
+  } catch (error) {
+    res.writeHead(error.statusCode || 400);
+    return res.end(error.message || 'Bad request');
   }
 
   fs.readFile(file, (err, data) => {
