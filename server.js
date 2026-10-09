@@ -3,16 +3,13 @@ const fs = require('fs');
 const path = require('path');
 const PORT = process.env.PORT || 3000;
 const ROOT = path.join(__dirname, 'public');
-const MAX_BODY = 12000;
-const SEARCH_TIMEOUT_MS = 6500;
-const CACHE_TTL_MS = 3 * 60 * 1000;
-const MAX_CACHE_ITEMS = 150;
+const { LIMITS, BLOCKED_SEARCH_REPLY, isRestrictedSearch } = require('./safety-limits');
 const cache = new Map();
 const inFlight = new Map();
 
 function calc(s) {
   const expr = s.replace(/,/g, '').match(/(?:what is|calculate|compute|solve|evaluate|equals?)\s+(.+?)\??$/i)?.[1] || (/^[\d\s()+\-*/%.^]+$/.test(s.trim()) ? s.trim() : null);
-  if (!expr || expr.length > 100 || !/^[\d\s()+\-*/%.^]+$/.test(expr)) return null;
+  if (!expr || expr.length > LIMITS.MAX_CALC_EXPRESSION_CHARS || !/^[\d\s()+\-*/%.^]+$/.test(expr)) return null;
   try {
     const result = Function('"use strict"; return (' + expr.replace(/\^/g, '**') + ')')();
     return Number.isFinite(result) ? String(Number(result.toPrecision(12))) : null;
@@ -36,7 +33,7 @@ function simplifiedQuery(query) {
 
 async function fetchText(url, accept = 'text/html') {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), LIMITS.SEARCH_TIMEOUT_MS);
   try {
     const response = await fetch(url, {
       signal: controller.signal,
@@ -46,7 +43,7 @@ async function fetchText(url, accept = 'text/html') {
       }
     });
     if (!response.ok) throw new Error('Search provider returned HTTP ' + response.status);
-    return (await response.text()).slice(0, 1200000);
+    return (await response.text()).slice(0, LIMITS.MAX_FETCHED_TEXT_CHARS);
   } finally {
     clearTimeout(timeout);
   }
@@ -74,16 +71,16 @@ async function searchDuckDuckGo(query) {
       || block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/div>/i);
     const snippet = decodeHtml(snippetMatch?.[1] || '');
     if (title && !results.some(r => r.url === parsedUrl.href)) {
-      results.push({ title: title.slice(0, 220), url: parsedUrl.href, snippet: snippet.slice(0, 500), domain: parsedUrl.hostname, source: 'DuckDuckGo' });
+      results.push({ title: title.slice(0, LIMITS.MAX_RESULT_TITLE_CHARS), url: parsedUrl.href, snippet: snippet.slice(0, LIMITS.MAX_RESULT_SNIPPET_CHARS), domain: parsedUrl.hostname, source: 'DuckDuckGo' });
     }
-    if (results.length >= 8) break;
+    if (results.length >= LIMITS.MAX_RESULTS_PER_PROVIDER) break;
   }
   if (!results.length) throw new Error('DuckDuckGo returned no parseable results');
   return results;
 }
 
 async function searchBing(query) {
-  const html = await fetchText('https://www.bing.com/search?q=' + encodeURIComponent(query) + '&count=8');
+  const html = await fetchText('https://www.bing.com/search?q=' + encodeURIComponent(query) + '&count=' + LIMITS.MAX_RESULTS_PER_PROVIDER');
   const blocks = html.split(/<li class="b_algo"\b/i).slice(1);
   const results = [];
   for (const block of blocks) {
@@ -97,7 +94,7 @@ async function searchBing(query) {
       || block.match(/class="b_caption"[^>]*>([\s\S]*?)<\/div>/i);
     const snippet = decodeHtml(snippetMatch?.[1] || '');
     if (title && !results.some(r => r.url === parsedUrl.href)) {
-      results.push({ title: title.slice(0, 220), url: parsedUrl.href, snippet: snippet.slice(0, 500), domain: parsedUrl.hostname, source: 'Bing' });
+      results.push({ title: title.slice(0, LIMITS.MAX_RESULT_TITLE_CHARS), url: parsedUrl.href, snippet: snippet.slice(0, LIMITS.MAX_RESULT_SNIPPET_CHARS), domain: parsedUrl.hostname, source: 'Bing' });
     }
     if (results.length >= 8) break;
   }
@@ -106,7 +103,7 @@ async function searchBing(query) {
 }
 
 async function searchWikipedia(query) {
-  const url = 'https://en.wikipedia.org/w/rest.php/v1/search/page?q=' + encodeURIComponent(query) + '&limit=8';
+  const url = 'https://en.wikipedia.org/w/rest.php/v1/search/page?q=' + encodeURIComponent(query) + '&limit=' + LIMITS.MAX_RESULTS_PER_PROVIDER';
   const raw = await fetchText(url, 'application/json');
   const data = JSON.parse(raw);
   const results = (data.pages || []).map(page => ({
@@ -137,7 +134,7 @@ function searchWeb(query) {
   const key = query.toLowerCase().replace(/\s+/g, ' ').trim();
   const now = Date.now();
   const cached = cache.get(key);
-  if (cached && now - cached.time < CACHE_TTL_MS) {
+  if (cached && now - cached.time < LIMITS.CACHE_TTL_MS) {
     cache.delete(key); cache.set(key, cached);
     return Promise.resolve(cached.results);
   }
@@ -157,9 +154,9 @@ function searchWeb(query) {
       const failure = outcomes.find(x => x.status === 'rejected');
       if (failure) throw failure.reason;
     }
-    const results = merged.slice(0, 8);
+    const results = merged.slice(0, LIMITS.MAX_SEARCH_RESULTS);
     cache.set(key, { time: Date.now(), results });
-    while (cache.size > MAX_CACHE_ITEMS) cache.delete(cache.keys().next().value);
+    while (cache.size > LIMITS.MAX_CACHE_ITEMS) cache.delete(cache.keys().next().value);
     return results;
   }).finally(() => inFlight.delete(key));
   inFlight.set(key, work);
@@ -174,9 +171,6 @@ function makeAnswer(query, results) {
   return 'Here’s a quick answer based on live web search for “' + query + '”:\n\n' + lines.join('\n\n') + '\n\nThese are search-snippet summaries, not a response from a trained AI model. Open the linked sources below to check context and details.';
 }
 
-function isRestrictedSearch(q) {
-  return /\b(porn|pornography|gambling|sports betting|casino betting|buy (?:a )?(?:gun|firearm|weapon|ammunition)|make (?:a )?(?:bomb|explosive)|how to make (?:meth|fentanyl|poison)|suicide methods|how to self[- ]harm)\b/i.test(q);
-}
 
 const mime = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.json': 'application/json; charset=utf-8', '.svg': 'image/svg+xml' };
 const server = http.createServer((req, res) => {
@@ -189,17 +183,17 @@ const server = http.createServer((req, res) => {
     let body = '';
     req.on('data', chunk => {
       body += chunk;
-      if (body.length > MAX_BODY) { res.writeHead(413, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: 'Message is too large.' })); req.destroy(); }
+      if (body.length > LIMITS.MAX_REQUEST_BODY_CHARS) { res.writeHead(413, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: 'Message is too large.' })); req.destroy(); }
     });
     req.on('end', async () => {
       if (res.writableEnded) return;
       try {
         const data = JSON.parse(body);
-        const message = String(data.message || '').trim().slice(0, 500);
+        const message = String(data.message || '').trim().slice(0, LIMITS.MAX_MESSAGE_CHARS);
         if (!message) { res.writeHead(400, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ error: 'Please enter a question.' })); }
         if (isRestrictedSearch(message)) {
           res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
-          return res.end(JSON.stringify({ reply: 'I can’t search for that. Try a safe, educational question instead.', results: [], mode: 'blocked' }));
+          return res.end(JSON.stringify({ reply: BLOCKED_SEARCH_REPLY, results: [], mode: 'blocked' }));
         }
         const math = calc(message);
         if (math !== null) {
