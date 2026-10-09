@@ -2,6 +2,7 @@
 
 const dns = require('node:dns').promises;
 const net = require('node:net');
+const path = require('node:path');
 
 /*
  * ChatBTC safety policy and resource limits.
@@ -54,8 +55,13 @@ const EDUCATIONAL_ONLY_PATTERNS = [
   /\b(?:convert|turn|split)\s+water\s+(?:into|to)\s+(?:pure\s+)?oxygen\b/i,
   /\bhow\s+to\b.{0,100}\b(?:make|produce|extract|generate|concentrate|collect)\b.{0,60}\b(?:pure\s+)?oxygen\b/i,
   /\b(?:step[- ]by[- ]step|instructions?|recipe|procedure)\b.{0,100}\b(?:electrolysis|oxygen generation|chlorine gas|hydrogen gas)\b/i,
-  /\bhow\s+to\b.{0,100}\b(?:generate|make|produce|concentrate|collect)\b.{0,70}\b(?:chlorine gas|toxic gas|hydrogen gas|highly concentrated oxygen)\b/i
+  /\bhow\s+to\b.{0,100}\b(?:generate|make|produce|concentrate|collect)\b.{0,70}\b(?:chlorine gas|toxic gas|hydrogen gas|highly concentrated oxygen)\b/i,
+  /\b(?:how\s+to|steps?\s+to|step[- ]by[- ]step|instructions?\s+(?:to|for)|guide\s+to|recipe\s+for)\b.{0,120}\b(?:make|build|synthesize|produce|extract|generate|concentrate|weaponize|assemble|create)\b.{0,100}\b(?:bomb|explosive|poison|toxin|meth|fentanyl|weapon|malware|ransomware|chlorine gas|toxic gas|hydrogen gas|highly concentrated oxygen)\b/i
 ];
+
+const EDUCATIONAL_REPLY_OXYGEN = 'At a high level, electrolysis uses electrical energy to split water molecules into hydrogen and oxygen. It does not create oxygen alone: hydrogen is produced too. Hydrogen is flammable, and oxygen can make fires burn much more intensely, so I’ll keep this to the science and safety context rather than give a step-by-step gas-production procedure.';
+const EDUCATIONAL_REPLY_GENERAL = 'I can give a scientific overview and discuss risks, but I won’t turn this into step-by-step instructions for a hazardous procedure.';
+const NO_TRUSTED_SOURCE_REPLY = 'I couldn’t verify a suitable educational source in this search. Try a question about the underlying scientific principles or safety context.';
 
 const TRUSTED_EDUCATIONAL_DOMAINS = [
   'edu', 'gov', 'rsc.org', 'acs.org', 'chem.libretexts.org',
@@ -322,6 +328,43 @@ function isTrustedEducationalUrl(rawUrl) {
   }
 }
 
+
+function isOxygenQuestion(message) {
+  const value = String(message || '');
+  return /\bwater\b/i.test(value) && /\boxygen\b/i.test(value) &&
+    /\b(?:how|convert|turn|split|make|produce|extract|generate|electrolysis)\b/i.test(value);
+}
+
+function filterEducationalSummarySentences(sentences) {
+  return sentences.filter(sentence =>
+    !/\b(?:step\s*\d+|first,|next,|then,|add\s+\d|mix until|heat to|boil until|pour into|attach the|connect the|collect the gas|procedure is|follow these steps)\b/i.test(sentence)
+  );
+}
+
+function normalizeAllowedSourceUrl(rawUrl, baseUrl) {
+  try {
+    const parsed = baseUrl ? new URL(String(rawUrl), baseUrl) : new URL(String(rawUrl));
+    return isAllowedUrlShape(parsed.href) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveStaticFile(root, requestUrl) {
+  let requested;
+  try {
+    requested = decodeURIComponent((String(requestUrl || '/')).split('?')[0]);
+  } catch {
+    throw new InputGuardError('Bad request path.', 400);
+  }
+
+  const file = path.resolve(root, '.' + (requested === '/' ? '/index.html' : requested));
+  if (!file.startsWith(root + path.sep) && file !== path.join(root, 'index.html')) {
+    throw new InputGuardError('Forbidden path.', 403);
+  }
+  return file;
+}
+
 function applySecurityHeaders(res) {
   res.setHeader('x-content-type-options', 'nosniff');
   res.setHeader('x-frame-options', 'DENY');
@@ -343,6 +386,13 @@ module.exports = {
   readRequestBody,
   isPublicIp,
   isAllowedUrlShape,
+  normalizeAllowedSourceUrl,
+  resolveStaticFile,
+  filterEducationalSummarySentences,
+  isOxygenQuestion,
+  EDUCATIONAL_REPLY_OXYGEN,
+  EDUCATIONAL_REPLY_GENERAL,
+  NO_TRUSTED_SOURCE_REPLY,
   assertPublicHttpUrl,
   safeFetchText,
   isTrustedEducationalUrl,
