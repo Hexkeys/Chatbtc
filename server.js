@@ -10,6 +10,9 @@ const {
   getRequestPolicy,
   makeSafeSearchQuery,
   parseChatRequest,
+  isSafeCalculatorExpression,
+  isReadablePageContentType,
+  isUsablePageText,
   readRequestBody,
   safeFetchText,
   normalizeAllowedSourceUrl,
@@ -30,7 +33,7 @@ const inFlight = new Map();
 
 function calc(s) {
   const expr = s.replace(/,/g, '').match(/(?:what is|calculate|compute|solve|evaluate|equals?)\s+(.+?)\??$/i)?.[1] || (/^[\d\s()+\-*/%.^]+$/.test(s.trim()) ? s.trim() : null);
-  if (!expr || expr.length > LIMITS.MAX_CALC_EXPRESSION_CHARS || !/^[\d\s()+\-*/%.^]+$/.test(expr)) return null;
+  if (!isSafeCalculatorExpression(expr)) return null;
   try {
     const result = Function('"use strict"; return (' + expr.replace(/\^/g, '**') + ')')();
     return Number.isFinite(result) ? String(Number(result.toPrecision(12))) : null;
@@ -269,7 +272,7 @@ async function readAndSummarizeResults(results, query, policy) {
         maxBytes: LIMITS.MAX_PAGE_RESPONSE_BYTES,
         timeoutMs: LIMITS.PAGE_TIMEOUT_MS
       });
-      if (!/(text\/html|application\/xhtml\+xml|text\/plain)/i.test(fetched.contentType)) return null;
+      if (!isReadablePageContentType(fetched.contentType)) return null;
 
       let page;
       if (/text\/plain/i.test(fetched.contentType)) {
@@ -277,7 +280,7 @@ async function readAndSummarizeResults(results, query, policy) {
       } else {
         page = extractReadablePage(fetched.text);
       }
-      if (page.text.length < 160) return null;
+      if (!isUsablePageText(page.text)) return null;
 
       const summary = summarizePageText(page.text, query, policy === 'educational-only');
       if (!summary) return null;
